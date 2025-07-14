@@ -1,0 +1,193 @@
+
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+    provider = "prisma-client-js"
+    binaryTargets = ["native", "linux-musl-arm64-openssl-3.0.x"]
+    output = "/home/ubuntu/spaardoel-plant-app/app/node_modules/.prisma/client"
+}
+
+datasource db {
+    provider = "postgresql"
+    url      = env("DATABASE_URL")
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String    @unique
+  emailVerified DateTime?
+  image         String?
+  password      String?
+  role          UserRole  @default(CHILD)
+  parentId      String?   // Link to parent user
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // Relations
+  accounts      Account[]
+  sessions      Session[]
+  parent        User?        @relation("ParentChild", fields: [parentId], references: [id])
+  children      User[]       @relation("ParentChild")
+  savingsGoals  SavingsGoal[]
+  contributions Contribution[]
+  notifications Notification[]
+
+  @@map("users")
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+enum UserRole {
+  PARENT
+  CHILD
+}
+
+model SavingsGoal {
+  id            String   @id @default(cuid())
+  name          String
+  description   String?
+  targetAmount  Float
+  currentAmount Float    @default(0)
+  plantType     String   @default("sunflower")
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  userId        String   // Owner of the goal
+
+  // Relations
+  user               User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  contributions      Contribution[]
+  shareableLinks     ShareableLink[]
+  milestones         Milestone[]
+  externalContributions ExternalContribution[]
+
+  @@map("savings_goals")
+}
+
+model Contribution {
+  id        String   @id @default(cuid())
+  amount    Float
+  message   String?
+  createdAt DateTime @default(now())
+  goalId    String
+  userId    String   // Who made the contribution
+
+  // Relations
+  goal SavingsGoal @relation(fields: [goalId], references: [id], onDelete: Cascade)
+  user User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("contributions")
+}
+
+model ExternalContribution {
+  id             String   @id @default(cuid())
+  amount         Float
+  donorName      String?
+  donorEmail     String?
+  message        String?
+  isApproved     Boolean  @default(false)
+  approvedAt     DateTime?
+  createdAt      DateTime @default(now())
+  goalId         String
+  shareableLinkId String?
+
+  // Relations
+  goal          SavingsGoal    @relation(fields: [goalId], references: [id], onDelete: Cascade)
+  shareableLink ShareableLink? @relation(fields: [shareableLinkId], references: [id])
+
+  @@map("external_contributions")
+}
+
+model ShareableLink {
+  id                    String   @id @default(cuid())
+  token                 String   @unique
+  goalId                String
+  isActive              Boolean  @default(true)
+  allowAnonymous        Boolean  @default(true)
+  requireApproval       Boolean  @default(true)
+  maxAmount             Float?
+  expiresAt             DateTime?
+  accessCount           Int      @default(0)
+  qrCodeUrl             String?
+  createdAt             DateTime @default(now())
+
+  // Relations
+  goal                  SavingsGoal @relation(fields: [goalId], references: [id], onDelete: Cascade)
+  externalContributions ExternalContribution[]
+
+  @@map("shareable_links")
+}
+
+model Milestone {
+  id          String   @id @default(cuid())
+  percentage  Float    // 25, 50, 75, 95, 100
+  title       String
+  description String?
+  isReached   Boolean  @default(false)
+  reachedAt   DateTime?
+  rewardType  String?  // flower, fruit, special_plant
+  createdAt   DateTime @default(now())
+  goalId      String
+
+  // Relations
+  goal SavingsGoal @relation(fields: [goalId], references: [id], onDelete: Cascade)
+
+  @@map("milestones")
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  title     String
+  message   String
+  type      NotificationType
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+  userId    String
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("notifications")
+}
+
+enum NotificationType {
+  MILESTONE
+  CONTRIBUTION
+  EXTERNAL_CONTRIBUTION
+  GOAL_COMPLETED
+}
