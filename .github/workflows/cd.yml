@@ -1,0 +1,379 @@
+
+name: Continuous Deployment
+
+on:
+  workflow_run:
+    workflows: ["Continuous Integration"]
+    types:
+      - completed
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+        - staging
+        - production
+      skip_tests:
+        description: 'Skip deployment tests'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  NODE_VERSION: '18.x'
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # Pre-deployment Checks
+  pre-deployment:
+    name: Pre-deployment Checks
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
+    outputs:
+      deploy_staging: ${{ steps.check.outputs.deploy_staging }}
+      deploy_production: ${{ steps.check.outputs.deploy_production }}
+      image_tag: ${{ steps.check.outputs.image_tag }}
+    steps:
+      - name: 📦 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🎯 Determine deployment targets
+        id: check
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            if [[ "${{ inputs.environment }}" == "staging" ]]; then
+              echo "deploy_staging=true" >> $GITHUB_OUTPUT
+              echo "deploy_production=false" >> $GITHUB_OUTPUT
+            else
+              echo "deploy_staging=false" >> $GITHUB_OUTPUT
+              echo "deploy_production=true" >> $GITHUB_OUTPUT
+            fi
+          else
+            # Auto-deploy to staging on main branch
+            echo "deploy_staging=true" >> $GITHUB_OUTPUT
+            echo "deploy_production=false" >> $GITHUB_OUTPUT
+          fi
+          
+          # Set image tag
+          echo "image_tag=${{ github.sha }}" >> $GITHUB_OUTPUT
+
+      - name: 🔍 Verify image exists
+        run: |
+          docker manifest inspect ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.check.outputs.image_tag }}
+
+  # Deploy to Staging
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: [pre-deployment]
+    if: needs.pre-deployment.outputs.deploy_staging == 'true'
+    environment:
+      name: staging
+      url: https://staging.spaardoel-plant-tracker.com
+    steps:
+      - name: 📦 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🔧 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: 📥 Install dependencies
+        run: npm ci
+
+      - name: 🗄️ Run database migrations
+        run: npx prisma migrate deploy
+        env:
+          DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
+
+      - name: 🚀 Deploy to staging
+        run: |
+          # Deploy using your preferred method (Vercel, Railway, Docker, etc.)
+          echo "Deploying to staging environment..."
+          # Example for Vercel:
+          # npx vercel --prod --token ${{ secrets.VERCEL_TOKEN }}
+          # Example for Docker deployment:
+          # docker run -d --name staging-app -p 3000:3000 \
+          #   -e DATABASE_URL="${{ secrets.STAGING_DATABASE_URL }}" \
+          #   -e NEXTAUTH_URL="https://staging.spaardoel-plant-tracker.com" \
+          #   -e NEXTAUTH_SECRET="${{ secrets.NEXTAUTH_SECRET }}" \
+          #   ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.pre-deployment.outputs.image_tag }}
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+
+      - name: ⏳ Wait for deployment
+        run: |
+          echo "Waiting for staging deployment to be ready..."
+          npx wait-on https://staging.spaardoel-plant-tracker.com --timeout 300000
+
+      - name: 🔍 Health check
+        run: |
+          node scripts/health-check.js https://staging.spaardoel-plant-tracker.com
+
+      - name: 📧 Notify staging deployment
+        uses: 8398a7/action-slack@v3
+        with:
+          status: ${{ job.status }}
+          channel: '#deployments'
+          webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+          fields: repo,message,commit,author,action,eventName,ref,workflow
+          custom_payload: |
+            {
+              text: "🚀 Staging Deployment Complete",
+              attachments: [{
+                color: "good",
+                fields: [{
+                  title: "Environment",
+                  value: "Staging",
+                  short: true
+                }, {
+                  title: "URL",
+                  value: "https://staging.spaardoel-plant-tracker.com",
+                  short: true
+                }, {
+                  title: "Commit",
+                  value: "${{ github.sha }}",
+                  short: true
+                }]
+              }]
+            }
+
+  # Staging Tests
+  staging-tests:
+    name: Staging Tests
+    runs-on: ubuntu-latest
+    needs: [deploy-staging]
+    if: needs.deploy-staging.result == 'success' && !inputs.skip_tests
+    steps:
+      - name: 📦 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🔧 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: 📥 Install dependencies
+        run: npm ci
+
+      - name: 📥 Install Playwright browsers
+        run: npx playwright install --with-deps
+
+      - name: 🧪 Run smoke tests
+        run: npm run test:smoke
+        env:
+          PLAYWRIGHT_BASE_URL: https://staging.spaardoel-plant-tracker.com
+
+      - name: 🧪 Run user journey tests
+        run: npm run test:user-journeys
+        env:
+          PLAYWRIGHT_BASE_URL: https://staging.spaardoel-plant-tracker.com
+
+      - name: 🔍 OWASP ZAP Security Scan
+        uses: zaproxy/action-baseline-scan@v0.7.0
+        with:
+          target: 'https://staging.spaardoel-plant-tracker.com'
+          rules_file_name: '.zap/rules.tsv'
+
+      - name: 📊 Upload test results
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: staging-test-results
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 30
+
+  # Production Deployment Approval
+  production-approval:
+    name: Production Deployment Approval
+    runs-on: ubuntu-latest
+    needs: [staging-tests, pre-deployment]
+    if: |
+      (needs.staging-tests.result == 'success' || inputs.skip_tests) && 
+      (needs.pre-deployment.outputs.deploy_production == 'true' || 
+       (needs.pre-deployment.outputs.deploy_staging == 'true' && github.ref == 'refs/heads/main'))
+    environment:
+      name: production-approval
+    steps:
+      - name: 🎯 Manual approval required
+        run: |
+          echo "Manual approval required for production deployment"
+          echo "Staging tests: ${{ needs.staging-tests.result }}"
+          echo "Ready for production deployment"
+
+  # Deploy to Production
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: [production-approval, pre-deployment]
+    if: needs.production-approval.result == 'success'
+    environment:
+      name: production
+      url: https://spaardoel-plant-tracker.com
+    steps:
+      - name: 📦 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🔧 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: 📥 Install dependencies
+        run: npm ci
+
+      - name: 🗄️ Run database migrations
+        run: npx prisma migrate deploy
+        env:
+          DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+
+      - name: 🚀 Deploy to production (Canary)
+        run: |
+          echo "Starting canary deployment to production..."
+          # Implement canary deployment logic
+          node scripts/deploy-canary.js
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+          IMAGE_TAG: ${{ needs.pre-deployment.outputs.image_tag }}
+
+      - name: ⏳ Wait for canary deployment
+        run: |
+          echo "Waiting for canary deployment to be ready..."
+          npx wait-on https://spaardoel-plant-tracker.com --timeout 300000
+
+      - name: 🔍 Canary health check
+        run: |
+          node scripts/health-check.js https://spaardoel-plant-tracker.com
+
+      - name: 📊 Monitor canary metrics
+        run: |
+          echo "Monitoring canary deployment metrics..."
+          node scripts/check-canary-metrics.js
+        env:
+          DATADOG_API_KEY: ${{ secrets.DATADOG_API_KEY }}
+
+      - name: 🚀 Complete production deployment
+        run: |
+          echo "Canary deployment successful, completing full deployment..."
+          node scripts/complete-deployment.js
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+
+      - name: 📧 Notify production deployment
+        uses: 8398a7/action-slack@v3
+        with:
+          status: ${{ job.status }}
+          channel: '#deployments'
+          webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+          fields: repo,message,commit,author,action,eventName,ref,workflow
+          custom_payload: |
+            {
+              text: "🎉 Production Deployment Complete",
+              attachments: [{
+                color: "good",
+                fields: [{
+                  title: "Environment",
+                  value: "Production",
+                  short: true
+                }, {
+                  title: "URL",
+                  value: "https://spaardoel-plant-tracker.com",
+                  short: true
+                }, {
+                  title: "Commit",
+                  value: "${{ github.sha }}",
+                  short: true
+                }]
+              }]
+            }
+
+  # Production Tests
+  production-tests:
+    name: Production Tests
+    runs-on: ubuntu-latest
+    needs: [deploy-production]
+    if: needs.deploy-production.result == 'success'
+    steps:
+      - name: 📦 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🔧 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: 📥 Install dependencies
+        run: npm ci
+
+      - name: 🧪 Run production smoke tests
+        run: npm run test:smoke
+        env:
+          PLAYWRIGHT_BASE_URL: https://spaardoel-plant-tracker.com
+
+      - name: 🔍 Production health check
+        run: |
+          node scripts/health-check.js https://spaardoel-plant-tracker.com
+
+      - name: 📊 Setup monitoring
+        run: |
+          node scripts/setup-monitoring.js
+        env:
+          DATADOG_API_KEY: ${{ secrets.DATADOG_API_KEY }}
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+
+  # Rollback on Failure
+  rollback:
+    name: Rollback on Failure
+    runs-on: ubuntu-latest
+    needs: [deploy-production, production-tests]
+    if: failure() && needs.deploy-production.result == 'success'
+    steps:
+      - name: 📦 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🔄 Rollback deployment
+        run: |
+          echo "Rolling back production deployment..."
+          node scripts/rollback-deployment.js
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+
+      - name: 📧 Notify rollback
+        uses: 8398a7/action-slack@v3
+        with:
+          status: failure
+          channel: '#incidents'
+          webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+          fields: repo,message,commit,author,action,eventName,ref,workflow
+          custom_payload: |
+            {
+              text: "🚨 Production Rollback Initiated",
+              attachments: [{
+                color: "danger",
+                fields: [{
+                  title: "Reason",
+                  value: "Production deployment failed validation",
+                  short: false
+                }, {
+                  title: "Action Taken",
+                  value: "Automatic rollback to previous version",
+                  short: false
+                }]
+              }]
+            }

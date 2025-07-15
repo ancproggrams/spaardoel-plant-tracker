@@ -1,0 +1,373 @@
+
+name: Monitoring & Alerting
+
+on:
+  schedule:
+    # Run every 15 minutes
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+    inputs:
+      check_type:
+        description: 'Type of monitoring check to run'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+        - all
+        - uptime
+        - performance
+        - security
+        - business
+
+env:
+  NODE_VERSION: '18.x'
+
+jobs:
+  # Uptime Monitoring
+  uptime-monitoring:
+    name: Uptime Monitoring
+    runs-on: ubuntu-latest
+    if: ${{ inputs.check_type == 'all' || inputs.check_type == 'uptime' || github.event_name == 'schedule' }}
+    strategy:
+      matrix:
+        environment: [staging, production]
+    steps:
+      - name: 📦 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🔧 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: 📥 Install dependencies
+        run: npm ci
+
+      - name: 🔍 Health check
+        id: health
+        run: |
+          if [[ "${{ matrix.environment }}" == "staging" ]]; then
+            URL="https://staging.spaardoel-plant-tracker.com"
+          else
+            URL="https://spaardoel-plant-tracker.com"
+          fi
+          
+          echo "Checking health of $URL"
+          node scripts/health-check.js $URL
+        continue-on-error: true
+
+      - name: 📊 Record uptime metrics
+        run: |
+          # Send uptime metrics to monitoring system
+          node scripts/record-uptime-metrics.js
+        env:
+          ENVIRONMENT: ${{ matrix.environment }}
+          STATUS: ${{ steps.health.outcome }}
+          DATADOG_API_KEY: ${{ secrets.DATADOG_API_KEY }}
+          PROMETHEUS_GATEWAY: ${{ secrets.PROMETHEUS_GATEWAY }}
+
+      - name: 🚨 Alert on downtime
+        if: steps.health.outcome == 'failure'
+        uses: 8398a7/action-slack@v3
+        with:
+          status: failure
+          channel: '#alerts'
+          webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+          fields: repo,message,commit,author,action,eventName,ref,workflow
+          custom_payload: |
+            {
+              text: "🚨 DOWNTIME ALERT",
+              attachments: [{
+                color: "danger",
+                fields: [{
+                  title: "Environment",
+                  value: "${{ matrix.environment }}",
+                  short: true
+                }, {
+                  title: "Status",
+                  value: "DOWN",
+                  short: true
+                }, {
+                  title: "Time",
+                  value: "${{ github.event.head_commit.timestamp }}",
+                  short: true
+                }]
+              }]
+            }
+
+  # Performance Monitoring
+  performance-monitoring:
+    name: Performance Monitoring
+    runs-on: ubuntu-latest
+    if: ${{ inputs.check_type == 'all' || inputs.check_type == 'performance' || github.event_name == 'schedule' }}
+    strategy:
+      matrix:
+        environment: [staging, production]
+    steps:
+      - name: 📦 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🔧 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: 📥 Install dependencies
+        run: npm ci
+
+      - name: 🔍 Lighthouse performance audit
+        run: |
+          if [[ "${{ matrix.environment }}" == "staging" ]]; then
+            URL="https://staging.spaardoel-plant-tracker.com"
+          else
+            URL="https://spaardoel-plant-tracker.com"
+          fi
+          
+          npx lhci autorun --config=.lighthouserc-monitoring.js
+        env:
+          LIGHTHOUSE_URL: ${{ matrix.environment == 'staging' && 'https://staging.spaardoel-plant-tracker.com' || 'https://spaardoel-plant-tracker.com' }}
+
+      - name: 📊 Analyze performance metrics
+        run: |
+          node scripts/analyze-performance-metrics.js
+        env:
+          ENVIRONMENT: ${{ matrix.environment }}
+          DATADOG_API_KEY: ${{ secrets.DATADOG_API_KEY }}
+
+      - name: 🚨 Alert on performance degradation
+        run: |
+          node scripts/check-performance-thresholds.js
+        env:
+          ENVIRONMENT: ${{ matrix.environment }}
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+
+  # Security Monitoring
+  security-monitoring:
+    name: Security Monitoring
+    runs-on: ubuntu-latest
+    if: ${{ inputs.check_type == 'all' || inputs.check_type == 'security' || github.event_name == 'schedule' }}
+    steps:
+      - name: 📦 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🔧 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: 📥 Install dependencies
+        run: npm ci
+
+      - name: 🔍 Check SSL certificates
+        run: |
+          node scripts/check-ssl-certificates.js
+        env:
+          DOMAINS: 'spaardoel-plant-tracker.com,staging.spaardoel-plant-tracker.com'
+
+      - name: 🔍 Monitor security headers
+        run: |
+          node scripts/check-security-headers.js
+        env:
+          URLS: 'https://spaardoel-plant-tracker.com,https://staging.spaardoel-plant-tracker.com'
+
+      - name: 🔍 Check for exposed secrets
+        run: |
+          node scripts/check-exposed-secrets.js
+        env:
+          URLS: 'https://spaardoel-plant-tracker.com,https://staging.spaardoel-plant-tracker.com'
+
+      - name: 📊 Record security metrics
+        run: |
+          node scripts/record-security-metrics.js
+        env:
+          DATADOG_API_KEY: ${{ secrets.DATADOG_API_KEY }}
+
+  # Business Metrics Monitoring
+  business-monitoring:
+    name: Business Metrics Monitoring
+    runs-on: ubuntu-latest
+    if: ${{ inputs.check_type == 'all' || inputs.check_type == 'business' || github.event_name == 'schedule' }}
+    steps:
+      - name: 📦 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🔧 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: 📥 Install dependencies
+        run: npm ci
+
+      - name: 📊 Collect user metrics
+        run: |
+          node scripts/collect-user-metrics.js
+        env:
+          DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+          DATADOG_API_KEY: ${{ secrets.DATADOG_API_KEY }}
+
+      - name: 📊 Collect goal completion metrics
+        run: |
+          node scripts/collect-goal-metrics.js
+        env:
+          DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+          DATADOG_API_KEY: ${{ secrets.DATADOG_API_KEY }}
+
+      - name: 📊 Collect plant interaction metrics
+        run: |
+          node scripts/collect-plant-metrics.js
+        env:
+          DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+          DATADOG_API_KEY: ${{ secrets.DATADOG_API_KEY }}
+
+      - name: 🚨 Alert on business metric anomalies
+        run: |
+          node scripts/check-business-anomalies.js
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+          DATADOG_API_KEY: ${{ secrets.DATADOG_API_KEY }}
+
+  # Database Monitoring
+  database-monitoring:
+    name: Database Monitoring
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'schedule' }}
+    steps:
+      - name: 📦 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🔧 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: 📥 Install dependencies
+        run: npm ci
+
+      - name: 🔍 Check database performance
+        run: |
+          node scripts/check-database-performance.js
+        env:
+          DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+
+      - name: 🔍 Check database connections
+        run: |
+          node scripts/check-database-connections.js
+        env:
+          DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+
+      - name: 🔍 Monitor database size
+        run: |
+          node scripts/monitor-database-size.js
+        env:
+          DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+          DATADOG_API_KEY: ${{ secrets.DATADOG_API_KEY }}
+
+      - name: 🚨 Alert on database issues
+        run: |
+          node scripts/check-database-alerts.js
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+
+  # Error Monitoring
+  error-monitoring:
+    name: Error Monitoring
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'schedule' }}
+    steps:
+      - name: 📦 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🔧 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: 📥 Install dependencies
+        run: npm ci
+
+      - name: 📊 Analyze error rates
+        run: |
+          node scripts/analyze-error-rates.js
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          DATADOG_API_KEY: ${{ secrets.DATADOG_API_KEY }}
+
+      - name: 🔍 Check for new error patterns
+        run: |
+          node scripts/check-error-patterns.js
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+
+      - name: 🚨 Alert on critical errors
+        run: |
+          node scripts/alert-critical-errors.js
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+          PAGERDUTY_INTEGRATION_KEY: ${{ secrets.PAGERDUTY_INTEGRATION_KEY }}
+
+  # Generate Monitoring Report
+  monitoring-report:
+    name: Generate Monitoring Report
+    runs-on: ubuntu-latest
+    needs: [uptime-monitoring, performance-monitoring, security-monitoring, business-monitoring]
+    if: always() && github.event_name == 'schedule'
+    steps:
+      - name: 📦 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🔧 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: 📥 Install dependencies
+        run: npm ci
+
+      - name: 📊 Generate comprehensive report
+        run: |
+          node scripts/generate-monitoring-report.js
+        env:
+          UPTIME_STATUS: ${{ needs.uptime-monitoring.result }}
+          PERFORMANCE_STATUS: ${{ needs.performance-monitoring.result }}
+          SECURITY_STATUS: ${{ needs.security-monitoring.result }}
+          BUSINESS_STATUS: ${{ needs.business-monitoring.result }}
+          DATADOG_API_KEY: ${{ secrets.DATADOG_API_KEY }}
+
+      - name: 📧 Send daily summary
+        uses: 8398a7/action-slack@v3
+        with:
+          status: custom
+          channel: '#monitoring'
+          webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+          custom_payload: |
+            {
+              text: "📊 Daily Monitoring Summary",
+              attachments: [{
+                color: "good",
+                fields: [{
+                  title: "Uptime",
+                  value: "${{ needs.uptime-monitoring.result }}",
+                  short: true
+                }, {
+                  title: "Performance",
+                  value: "${{ needs.performance-monitoring.result }}",
+                  short: true
+                }, {
+                  title: "Security",
+                  value: "${{ needs.security-monitoring.result }}",
+                  short: true
+                }, {
+                  title: "Business Metrics",
+                  value: "${{ needs.business-monitoring.result }}",
+                  short: true
+                }]
+              }]
+            }
