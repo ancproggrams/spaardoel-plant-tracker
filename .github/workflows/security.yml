@@ -1,0 +1,338 @@
+
+name: Scheduled Security Scans
+
+on:
+  schedule:
+    # Run daily at 2 AM UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      scan_type:
+        description: 'Type of security scan to run'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+        - all
+        - dependencies
+        - containers
+        - infrastructure
+        - secrets
+        - dast
+
+env:
+  NODE_VERSION: '18.x'
+
+jobs:
+  # Dependency Vulnerability Monitoring
+  dependency-monitoring:
+    name: Dependency Vulnerability Monitoring
+    runs-on: ubuntu-latest
+    if: ${{ inputs.scan_type == 'all' || inputs.scan_type == 'dependencies' || github.event_name == 'schedule' }}
+    steps:
+      - name: 📦 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🔧 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: 📥 Install dependencies
+        run: npm ci
+
+      - name: 🔍 Snyk Monitor
+        uses: snyk/actions/node@master
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          command: monitor
+
+      - name: 🔍 OWASP Dependency Check
+        uses: dependency-check/Dependency-Check_Action@main
+        with:
+          project: 'spaardoel-plant-tracker'
+          path: '.'
+          format: 'JSON'
+          out: 'dependency-check-report'
+          args: >
+            --enableRetired
+            --enableExperimental
+            --nodeAuditSkipDevDependencies
+
+      - name: 📊 Process dependency scan results
+        run: |
+          # Custom script to process and alert on new vulnerabilities
+          node scripts/process-dependency-results.js
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+
+  # Container Security Monitoring
+  container-monitoring:
+    name: Container Security Monitoring
+    runs-on: ubuntu-latest
+    if: ${{ inputs.scan_type == 'all' || inputs.scan_type == 'containers' || github.event_name == 'schedule' }}
+    steps:
+      - name: 📦 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🔍 Scan latest production image with Trivy
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'ghcr.io/${{ github.repository }}:latest'
+          format: 'json'
+          output: 'trivy-results.json'
+
+      - name: 🔍 Scan with Grype
+        uses: anchore/scan-action@v3
+        with:
+          image: 'ghcr.io/${{ github.repository }}:latest'
+          fail-build: false
+          output-format: json
+          output-file: grype-results.json
+
+      - name: 📊 Process container scan results
+        run: |
+          # Custom script to compare with previous scans and alert on new issues
+          node scripts/process-container-results.js
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+
+  # Infrastructure Security Scan
+  infrastructure-scan:
+    name: Infrastructure Security Scan
+    runs-on: ubuntu-latest
+    if: ${{ inputs.scan_type == 'all' || inputs.scan_type == 'infrastructure' || github.event_name == 'schedule' }}
+    steps:
+      - name: 📦 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🔍 Terraform Security Scan
+        uses: aquasecurity/tfsec-action@v1.0.3
+        with:
+          working_directory: './infrastructure'
+          format: json
+          soft_fail: true
+
+      - name: 🔍 Checkov IaC Scan
+        uses: bridgecrewio/checkov-action@master
+        with:
+          directory: ./infrastructure
+          framework: terraform
+          output_format: json
+          output_file_path: checkov-results.json
+
+      - name: 🔍 Kubesec Security Scan
+        run: |
+          if [ -d "./k8s" ]; then
+            docker run --rm -v $(pwd):/workspace kubesec/kubesec:latest scan /workspace/k8s/*.yaml > kubesec-results.json
+          fi
+
+      - name: 📊 Process infrastructure scan results
+        run: |
+          node scripts/process-infrastructure-results.js
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+
+  # Secret Monitoring
+  secret-monitoring:
+    name: Secret Monitoring
+    runs-on: ubuntu-latest
+    if: ${{ inputs.scan_type == 'all' || inputs.scan_type == 'secrets' || github.event_name == 'schedule' }}
+    steps:
+      - name: 📦 Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 🔍 TruffleHog Secret Scan
+        uses: trufflesecurity/trufflehog@main
+        with:
+          path: ./
+          base: HEAD~1
+          head: HEAD
+          extra_args: --debug --only-verified
+
+      - name: 🔍 Gitleaks Secret Scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 🔍 Custom secret patterns scan
+        run: |
+          # Scan for application-specific secret patterns
+          node scripts/scan-custom-secrets.js
+
+  # Dynamic Application Security Testing (DAST)
+  dast-scan:
+    name: DAST Security Scan
+    runs-on: ubuntu-latest
+    if: ${{ inputs.scan_type == 'all' || inputs.scan_type == 'dast' || github.event_name == 'schedule' }}
+    steps:
+      - name: 📦 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🔍 OWASP ZAP Full Scan (Production)
+        uses: zaproxy/action-full-scan@v0.7.0
+        with:
+          target: 'https://spaardoel-plant-tracker.com'
+          rules_file_name: '.zap/rules.tsv'
+          cmd_options: '-a -j'
+          allow_issue_writing: false
+
+      - name: 🔍 Nuclei Security Scan
+        uses: projectdiscovery/nuclei-action@main
+        with:
+          target: 'https://spaardoel-plant-tracker.com'
+          templates: 'cves,vulnerabilities,misconfiguration,exposed-panels'
+
+      - name: 🔍 Custom DAST checks
+        run: |
+          # Custom security checks specific to the application
+          node scripts/custom-dast-checks.js
+        env:
+          TARGET_URL: 'https://spaardoel-plant-tracker.com'
+
+  # GDPR Compliance Monitoring
+  gdpr-monitoring:
+    name: GDPR Compliance Monitoring
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'schedule' }}
+    steps:
+      - name: 📦 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🔧 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: 📥 Install dependencies
+        run: npm ci
+
+      - name: 🔍 Check data retention compliance
+        run: |
+          # Check for data older than retention period
+          node scripts/check-data-retention.js
+        env:
+          DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+
+      - name: 🔍 Audit data access logs
+        run: |
+          # Audit recent data access patterns
+          node scripts/audit-data-access.js
+        env:
+          DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+
+      - name: 🔍 Validate consent mechanisms
+        run: |
+          # Validate that consent mechanisms are working
+          node scripts/validate-consent.js
+        env:
+          BASE_URL: 'https://spaardoel-plant-tracker.com'
+
+      - name: 📊 Generate compliance report
+        run: |
+          # Generate monthly compliance report
+          node scripts/generate-compliance-report.js
+        env:
+          DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+          REPORT_EMAIL: ${{ secrets.COMPLIANCE_EMAIL }}
+
+  # Security Metrics Collection
+  security-metrics:
+    name: Security Metrics Collection
+    runs-on: ubuntu-latest
+    needs: [dependency-monitoring, container-monitoring, infrastructure-scan, secret-monitoring, dast-scan]
+    if: always() && github.event_name == 'schedule'
+    steps:
+      - name: 📦 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 📊 Collect security metrics
+        run: |
+          # Aggregate security scan results and send to monitoring
+          node scripts/collect-security-metrics.js
+        env:
+          DATADOG_API_KEY: ${{ secrets.DATADOG_API_KEY }}
+          PROMETHEUS_GATEWAY: ${{ secrets.PROMETHEUS_GATEWAY }}
+
+      - name: 📧 Send security summary
+        uses: 8398a7/action-slack@v3
+        with:
+          status: custom
+          channel: '#security'
+          webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+          custom_payload: |
+            {
+              text: "📊 Daily Security Scan Summary",
+              attachments: [{
+                color: "good",
+                fields: [{
+                  title: "Dependencies",
+                  value: "${{ needs.dependency-monitoring.result }}",
+                  short: true
+                }, {
+                  title: "Containers",
+                  value: "${{ needs.container-monitoring.result }}",
+                  short: true
+                }, {
+                  title: "Infrastructure",
+                  value: "${{ needs.infrastructure-scan.result }}",
+                  short: true
+                }, {
+                  title: "Secrets",
+                  value: "${{ needs.secret-monitoring.result }}",
+                  short: true
+                }, {
+                  title: "DAST",
+                  value: "${{ needs.dast-scan.result }}",
+                  short: true
+                }]
+              }]
+            }
+
+  # Incident Response Trigger
+  incident-response:
+    name: Incident Response
+    runs-on: ubuntu-latest
+    needs: [dependency-monitoring, container-monitoring, infrastructure-scan, secret-monitoring, dast-scan]
+    if: failure()
+    steps:
+      - name: 🚨 Trigger incident response
+        run: |
+          # Trigger incident response procedures for critical findings
+          node scripts/trigger-incident-response.js
+        env:
+          PAGERDUTY_INTEGRATION_KEY: ${{ secrets.PAGERDUTY_INTEGRATION_KEY }}
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+
+      - name: 📧 Alert security team
+        uses: 8398a7/action-slack@v3
+        with:
+          status: failure
+          channel: '#security-incidents'
+          webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+          fields: repo,message,commit,author,workflow
+          custom_payload: |
+            {
+              text: "🚨 SECURITY ALERT: Critical security issues detected!",
+              attachments: [{
+                color: "danger",
+                fields: [{
+                  title: "Repository",
+                  value: "${{ github.repository }}",
+                  short: true
+                }, {
+                  title: "Workflow",
+                  value: "${{ github.workflow }}",
+                  short: true
+                }, {
+                  title: "Action Required",
+                  value: "Immediate security review needed",
+                  short: false
+                }]
+              }]
+            }
