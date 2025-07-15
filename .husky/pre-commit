@@ -1,0 +1,22 @@
+
+#!/usr/bin/env sh
+. "$(dirname -- "$0")/_/husky.sh"
+
+# Run lint-staged for code quality checks
+npx lint-staged
+
+# Run security checks
+echo "🔍 Running security checks..."
+npm run security:scan
+
+# Check for GDPR compliance patterns
+echo "🔍 Checking GDPR compliance..."
+if ! grep -r "consent" --include="*.ts" --include="*.tsx" src/ > /dev/null 2>&1; then
+  echo "⚠️ Warning: No consent mechanisms found in code"
+fi
+
+if ! grep -r "privacy" --include="*.ts" --include="*.tsx" src/ > /dev/null 2>&1; then
+  echo "⚠️ Warning: No privacy-related code found"
+fi
+
+echo "✅ Pre-commit checks completed"
