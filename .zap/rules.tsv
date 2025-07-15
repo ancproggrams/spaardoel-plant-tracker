@@ -1,0 +1,155 @@
+
+# OWASP ZAP Rules Configuration for Spaardoel Plant Tracker
+# This file defines custom rules for security scanning
+
+# Rule format: RULE_ID	STATUS	THRESHOLD	DESCRIPTION
+
+# Authentication and Session Management
+10011	ON	HIGH	Cookie Without Secure Flag
+10012	ON	HIGH	Cookie Without HttpOnly Flag
+10015	ON	MEDIUM	Incomplete or No Cache-control and Pragma HTTP Header Set
+10016	ON	LOW	Web Browser XSS Protection Not Enabled
+10017	ON	LOW	Cross-Domain JavaScript Source File Inclusion
+10019	ON	MEDIUM	Content-Type Header Missing
+10020	ON	LOW	X-Frame-Options Header Scanner
+10021	ON	MEDIUM	X-Content-Type-Options Header Missing
+10023	ON	MEDIUM	Information Disclosure - Debug Error Messages
+10024	ON	INFO	Information Disclosure - Sensitive Information in URL
+10025	ON	MEDIUM	Information Disclosure - Sensitive Information in HTTP Referrer Header
+10026	ON	MEDIUM	HTTP Parameter Override
+10027	ON	MEDIUM	Information Disclosure - Suspicious Comments
+10028	ON	LOW	Open Redirect
+10029	ON	MEDIUM	Cookie Poisoning
+10030	ON	MEDIUM	User Controllable Charset
+10031	ON	MEDIUM	User Controllable HTML Element Attribute (Potential XSS)
+10032	ON	MEDIUM	Viewstate Scanner
+10033	ON	LOW	Directory Browsing
+10034	ON	MEDIUM	Heartbleed OpenSSL Vulnerability
+10035	ON	HIGH	Strict-Transport-Security Header Scanner
+10036	ON	MEDIUM	HTTP Server Response Header Scanner
+10037	ON	MEDIUM	Server Leaks Information via "X-Powered-By" HTTP Response Header Field(s)
+10038	ON	MEDIUM	Content Security Policy (CSP) Header Not Set
+10039	ON	MEDIUM	HTTP Server Response Header Scanner
+10040	ON	LOW	Secure Pages Include Mixed Content
+10041	ON	LOW	HTTPS Content Available via HTTP
+10042	ON	MEDIUM	Authentication Request Identified
+10043	ON	HIGH	User Controllable JavaScript Event (XSS)
+10044	ON	MEDIUM	Big Redirect Detected (Potential Sensitive Information Leak)
+10045	ON	HIGH	Source Code Disclosure - /WEB-INF folder
+10046	ON	MEDIUM	Mixed Content
+10047	ON	LOW	HTTPS Content Available via HTTP
+10048	ON	INFO	Remote Code Execution - Shell Shock
+10049	ON	MEDIUM	Content Cacheability
+10050	ON	INFO	Retrieved from Cache
+10051	ON	INFO	Retire.js
+10052	ON	LOW	X-ChromeLogger-Data (XCOLD) Header Information Leak
+10054	ON	LOW	Cookie without SameSite Attribute
+10055	ON	MEDIUM	CSP Scanner
+10056	ON	MEDIUM	X-Debug-Token Information Leak
+10057	ON	INFO	Username Hash Found
+10061	ON	INFO	X-AspNet-Version Response Header Scanner
+10062	ON	INFO	PII Scanner
+10063	ON	HIGH	Feature Policy Header Not Set
+10096	ON	HIGH	Timestamp Disclosure
+10097	ON	MEDIUM	Hash Disclosure
+10098	ON	INFO	Cross-Domain Misconfiguration
+10099	ON	MEDIUM	Source Code Disclosure
+
+# Input Validation
+20012	ON	HIGH	Anti CSRF Tokens Scanner
+20014	ON	HIGH	HTTP Parameter Pollution scanner
+20015	ON	INFO	Heartbleed OpenSSL Vulnerability (Indicative)
+20016	ON	MEDIUM	Cross-Domain Misconfiguration
+20017	ON	INFO	Source Code Disclosure - CVE-2012-1823
+20018	ON	HIGH	Remote Code Execution - CVE-2012-1823
+20019	ON	HIGH	External Redirect
+
+# XSS (Cross Site Scripting)
+40012	ON	HIGH	Cross Site Scripting (Reflected)
+40013	ON	HIGH	Cross Site Scripting (Persistent)
+40014	ON	HIGH	Cross Site Scripting (Persistent) - Prime
+40016	ON	HIGH	Cross Site Scripting (Persistent) - Spider
+40017	ON	HIGH	Cross Site Scripting (Persistent) - OData
+40018	ON	MEDIUM	SQL Injection
+40019	ON	HIGH	SQL Injection - MySQL
+40020	ON	HIGH	SQL Injection - Hypersonic SQL
+40021	ON	HIGH	SQL Injection - Oracle
+40022	ON	HIGH	SQL Injection - PostgreSQL
+40023	ON	MEDIUM	Possible Username Enumeration
+40024	ON	MEDIUM	SQL Injection - SQLite
+40025	ON	MEDIUM	Proxy Disclosure
+40026	ON	HIGH	Cross Site Scripting (DOM Based)
+40027	ON	HIGH	SQL Injection - MsSQL
+40028	ON	HIGH	Insecure HTTP Method
+40029	ON	MEDIUM	Trace.axd Information Leak
+
+# Application Specific Rules for Spaardoel Plant Tracker
+
+# Child Safety and GDPR Compliance
+90001	ON	HIGH	Child Data Protection Violation
+90002	ON	HIGH	GDPR Consent Mechanism Missing
+90003	ON	MEDIUM	Data Retention Policy Violation
+90004	ON	HIGH	Personal Data Exposure
+90005	ON	MEDIUM	Parental Consent Bypass
+
+# Financial Data Security
+90010	ON	HIGH	Financial Data Exposure
+90011	ON	HIGH	Insecure Financial Transaction
+90012	ON	MEDIUM	Saving Goal Data Leak
+90013	ON	HIGH	Payment Information Disclosure
+
+# Authentication and Authorization
+90020	ON	HIGH	Weak Password Policy
+90021	ON	HIGH	Insecure Session Management
+90022	ON	MEDIUM	Privilege Escalation
+90023	ON	HIGH	Bypass Authentication
+90024	ON	MEDIUM	Account Enumeration
+
+# API Security
+90030	ON	HIGH	API Key Exposure
+90031	ON	MEDIUM	Insecure API Endpoint
+90032	ON	HIGH	API Rate Limiting Missing
+90033	ON	MEDIUM	API Version Disclosure
+90034	ON	HIGH	GraphQL Introspection Enabled
+
+# Database Security
+90040	ON	HIGH	Database Connection String Exposure
+90041	ON	HIGH	SQL Injection in Child Profiles
+90042	ON	MEDIUM	Database Error Information Leak
+90043	ON	HIGH	Direct Database Access
+
+# File Upload Security
+90050	ON	HIGH	Malicious File Upload
+90051	ON	MEDIUM	File Type Validation Bypass
+90052	ON	HIGH	Path Traversal in File Upload
+90053	ON	MEDIUM	File Size Limit Bypass
+
+# Custom Application Logic
+90060	ON	MEDIUM	Plant Growth Manipulation
+90061	ON	LOW	Goal Progress Tampering
+90062	ON	MEDIUM	Reward System Bypass
+90063	ON	LOW	Age Verification Bypass
+
+# Infrastructure Security
+90070	ON	MEDIUM	Docker Container Misconfiguration
+90071	ON	HIGH	Environment Variable Exposure
+90072	ON	MEDIUM	Insecure Service Configuration
+90073	ON	HIGH	Secrets in Source Code
+
+# Monitoring and Logging
+90080	ON	MEDIUM	Insufficient Logging
+90081	ON	LOW	Log Injection
+90082	ON	MEDIUM	Sensitive Data in Logs
+90083	ON	LOW	Log Tampering
+
+# Third-party Integration Security
+90090	ON	HIGH	Insecure Third-party Integration
+90091	ON	MEDIUM	OAuth Misconfiguration
+90092	ON	HIGH	API Key in Client-side Code
+90093	ON	MEDIUM	Insecure Webhook Handling
+
+# Performance and DoS
+90100	ON	MEDIUM	Resource Exhaustion
+90101	ON	LOW	Slowloris Attack Vulnerability
+90102	ON	MEDIUM	Memory Exhaustion
+90103	ON	LOW	CPU Exhaustion
